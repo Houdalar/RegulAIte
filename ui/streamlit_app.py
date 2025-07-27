@@ -21,7 +21,26 @@ st.markdown(
     <style>
         .stButton>button {
             background-color: #28a745;
-            color: white;
+            color: #fff;
+            border: none;
+            padding: 0.5rem 1rem;
+            font-size: 1rem;
+            border-radius: 4px;
+        }
+        .stButton>button:hover {
+            background-color: #fff;
+            color: #28a745;
+            border: 1px solid #28a745;
+        }
+        .back>button {
+            background-color: #333;
+            color: #fff;
+            border: 1px solid #fff;
+        }
+        .back>button:hover {
+            background-color: #fff;
+            color: #333;
+            border: 1px solid #333;
         }
         .step {
             max-width: 600px;
@@ -52,41 +71,46 @@ if "step" not in st.session_state:
 if st.session_state.step == 1:
     with st.container():
         st.markdown("<div class='step'>", unsafe_allow_html=True)
-        st.header("1. Select a Model")
-        choice = st.radio("Choose your language model", ["OpenAI", "Qwen"],
-                          index=0 if st.session_state.provider == "openai" else 1)
+        st.header("1. Upload Documents")
+        uploaded = st.file_uploader("Upload PDF/TXT to analyze", accept_multiple_files=True)
         if st.button("Next"):
-            st.session_state.provider = "openai" if choice == "OpenAI" else "qwen"
-            st.session_state.step = 2
+            if uploaded:
+                os.makedirs("data/raw", exist_ok=True)
+                for f in uploaded:
+                    with open(f"data/raw/{f.name}", "wb") as out:
+                        out.write(f.read())
+                st.session_state.step = 2
+                st.experimental_rerun()
+            else:
+                st.warning("Please upload at least one file.")
         st.markdown("</div>", unsafe_allow_html=True)
 
 elif st.session_state.step == 2:
     with st.container():
         st.markdown("<div class='step'>", unsafe_allow_html=True)
-        st.header("2. Analyze Documents")
-        uploaded = st.file_uploader("Upload PDF/TXT to analyze", accept_multiple_files=True)
+        st.header("2. Select a Model")
+        choice = st.radio("Choose your language model", ["OpenAI", "Qwen"], index=0 if st.session_state.provider == "openai" else 1)
         col1, col2 = st.columns(2)
-        back = col1.button("Back")
-        start = col2.button("Start Analysis")
+        with col1:
+            st.markdown("<div class='back'>", unsafe_allow_html=True)
+            back = st.button("Back", key="back_model")
+            st.markdown("</div>", unsafe_allow_html=True)
+        start = col2.button("Start Chat", key="start_chat")
         if back:
             st.session_state.step = 1
-        if start and uploaded:
+            st.experimental_rerun()
+        if start:
+            st.session_state.provider = "openai" if choice == "OpenAI" else "qwen"
             with st.spinner("Indexing documents..."):
-                os.makedirs("data/raw", exist_ok=True)
-                for f in uploaded:
-                    with open(f"data/raw/{f.name}", "wb") as out:
-                        out.write(f.read())
                 chunks = load_and_split("data/raw")
                 build_or_load_store(chunks, persist_dir="vectorstore")
-                st.session_state.qa = create_qa_chain(
-                    persist_dir="vectorstore", provider=st.session_state.provider
-                )
+                st.session_state.qa = create_qa_chain(persist_dir="vectorstore", provider=st.session_state.provider)
                 st.session_state.indexed = True
                 st.session_state.history = [
                     ("assistant", "<i class='fas fa-robot'></i> Hi, I'm <b>RegulAIte</b>! How can I assist you today?")
                 ]
-                st.success("Analysis complete! Start chatting below.")
-                st.session_state.step = 3
+            st.session_state.step = 3
+            st.experimental_rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
 elif st.session_state.step == 3 and st.session_state.indexed:
@@ -94,9 +118,14 @@ elif st.session_state.step == 3 and st.session_state.indexed:
         st.markdown("<div class='step'>", unsafe_allow_html=True)
         st.header("3. Ask Your Policy Questions")
         col1, col2 = st.columns(2)
-        if col1.button("Back"):
+        with col1:
+            st.markdown("<div class='back'>", unsafe_allow_html=True)
+            back_chat = st.button("Back", key="back_chat")
+            st.markdown("</div>", unsafe_allow_html=True)
+        if back_chat:
             st.session_state.step = 2
-        if col2.button("End Chat"):
+        end = col2.button("End Chat")
+        if end:
             st.session_state.history = []
             st.session_state.qa = None
             st.session_state.indexed = False
