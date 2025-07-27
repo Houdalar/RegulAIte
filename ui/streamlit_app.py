@@ -1,144 +1,170 @@
-import os
-import sys
-
-# Ensure your project root is on the path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
+import os, sys
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit.runtime.scriptrunner.script_runner import RerunException
+
+# Local imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app.ingest import load_and_split
 from app.embed_store import build_or_load_store
 from app.qa_chain import create_qa_chain
 
+# ─── Config ─────────────────────────────────────────────────────
 load_dotenv()
+st.set_page_config(page_title="RegulAIte", layout="centered")
 
-st.set_page_config(page_title="RegulAIte", layout="wide")
-
-# ─── Global CSS ───────────────────────────────────────────────────────
+# Minimal button styling (Back transparent, Finish green)
 st.markdown(
     """
     <style>
-    .stTextInput>div>div>input:focus, textarea:focus {
-      outline: 2px solid #28a745 !important;
-      box-shadow: 0 0 0 0.2rem rgba(40,167,69,.25) !important;
+    div[data-testid="stButton"][data-key="back_btn"] button{
+        background: transparent !important; color:#333 !important; border:1px solid #ccc !important;
     }
-    .stButton>button {
-      background-color: #28a745;
-      color: white;
+    div[data-testid="stButton"][data-key="finish_btn"] button{
+        background:#28a745 !important; color:#fff !important; border:1px solid #28a745 !important;
     }
     </style>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 
-# ─── Session State Init ─────────────────────────────────────────────
-if "indexed" not in st.session_state:
-    st.session_state.indexed = False
-if "qa" not in st.session_state:
-    st.session_state.qa = None
-if "history" not in st.session_state:
-    st.session_state.history = []  # list of (role, msg)
-if "suggestions" not in st.session_state:
-    st.session_state.suggestions = None
+# ─── Helpers ────────────────────────────────────────────────────
+def show_sources(md_container, docs):
+    """Render unique sources inside an expander."""
+    seen = set()
+    lines = []
+    for i, d in enumerate(docs, 1):
+        src = d.metadata.get("source", "unknown")
+        page = d.metadata.get("page") or d.metadata.get("loc", "")
+        snippet = d.page_content.strip().replace("\n", " ")
+        key = (src, page, snippet[:120])
+        if key in seen:
+            continue
+        seen.add(key)
+        short = snippet[:240] + ("…" if len(snippet) > 240 else "")
+        lines.append(f"**{len(lines)+1}. {src}**{(' · p.'+str(page)) if page else ''}: “{short}”")
+    if lines:
+        with md_container.expander("Sources"):
+            for line in lines:
+                st.markdown(line)
 
-# ─── 1️⃣ Analyze Documents ───────────────────────────────────────────
-if not st.session_state.indexed:
-    st.header("1️⃣ Analyze Documents")
-    uploaded = st.file_uploader(
-        "Upload PDF/TXT to analyze", accept_multiple_files=True
+def build_history_pairs(history):
+    """Return list[(user_text, assistant_text)] from history tuples (role, text)."""
+    pairs = []
+    # iterate two by two
+    for (r1, t1), (r2, t2) in zip(history[::2], history[1::2]):
+        if r1 == "user" and r2 == "assistant":
+            pairs.append((t1, t2))
+    return pairs
+
+MAX_WORDS = 50
+
+# ─── State ──────────────────────────────────────────────────────
+if "step" not in st.session_state:
+    st.session_state.update(
+        step=1,
+        history=[],
+        qa=None,
+        indexed=False,
+        provider="openai",
     )
-    if st.button("Start Analysis") and uploaded:
-        with st.spinner("🔍 Indexing documents..."):
+
+# ─── Step 1: Upload ─────────────────────────────────────────────
+if st.session_state.step == 1:
+    st.header("1) Upload PDF/TXT files")
+    files = st.file_uploader("", accept_multiple_files=True)
+    if st.button("Next"):
+        if not files:
+            st.warning("Please upload at least one file.")
+        else:
             os.makedirs("data/raw", exist_ok=True)
-            for f in uploaded:
+            for f in files:
                 with open(f"data/raw/{f.name}", "wb") as out:
                     out.write(f.read())
+            st.session_state.step = 2
+            st.rerun()
+
+# ─── Step 2: Model Choice ───────────────────────────────────────
+elif st.session_state.step == 2:
+    st.header("2) Choose LLM Provider")
+    model = st.selectbox("Provider", ["OpenAI", "Qwen"],
+                         index=0 if st.session_state.provider == "openai" else 1)
+
+    col1, col2 = st.columns(2)
+    if col1.button("Back", key="back_btn"):
+        st.session_state.step = 1
+        st.rerun()
+
+    if col2.button("Start Chat", key="finish_btn"):
+        st.session_state.provider = model.lower()
+        st.info("Analyzing your documents, please wait…", icon="🔍")
+        with st.spinner("Indexing documents into vector store…"):
             chunks = load_and_split("data/raw")
             build_or_load_store(chunks, persist_dir="vectorstore")
-            st.session_state.qa = create_qa_chain(persist_dir="vectorstore")
-            st.session_state.indexed = True
-
-            # Generate initial topic suggestions
-            sug_res = st.session_state.qa({
-                "question": "List the main policy topics covered in these documents.",
-                "chat_history": []
-            })
-            st.session_state.suggestions = sug_res["answer"]
-
-        st.success("✅ Analysis complete! Scroll down for suggestions and chat.")
-
-# ─── 2️⃣ Chat Interface ─────────────────────────────────────────────
-if st.session_state.indexed:
-    st.header("2️⃣ Ask Your Policy Questions")
-
-    # Clear chat resets history but keeps suggestions
-    if st.button("🗑️ Clear Chat"):
-        st.session_state.history = []
-
-    # If it's the first interaction (empty history), show suggestions
-    if not st.session_state.history:
-        st.markdown("### Try asking about one of these policies:")
-        # suggestions is a string like "• Sick Leave\n• Pay Raise\n• Vacation"
-        topics = [
-            line.strip("• ").strip()
-            for line in (st.session_state.suggestions or "").split("\n")
-            if line.strip()
-        ]
-        cols = st.columns(min(len(topics), 3), gap="large")
-        for i, topic in enumerate(topics):
-            question_text = f"What is the policy regarding {topic.lower()}?"
-            with cols[i % len(cols)]:
-                st.markdown(f"**{topic}**")
-                if st.button(question_text, key=f"sug_{i}"):
-                    # inject a formatted question
-                    st.session_state.history.append(("user", question_text))
-
-    # Display chat history
-    for role, msg in st.session_state.history:
-        with st.chat_message(role):
-            st.write(msg)
-
-    # Chat input
-    user_input = st.chat_input("Type your question here…")
-    if user_input:
-        normalized = user_input.strip().lower()
-
-        # 1️⃣ Greetings
-        if normalized in ("hi", "hello", "hey"):
-            reply = (
-                "Hello! I’m RegulAIte. How can I assist you today? "
-                "You can ask about policies like sick leave, pay raise, etc."
+            st.session_state.qa = create_qa_chain(
+                persist_dir="vectorstore",
+                provider=st.session_state.provider
             )
-            st.session_state.history.append(("assistant", reply))
-            st.chat_message("assistant").write(reply)
+            st.session_state.indexed = True
+            st.session_state.history = [
+                ("assistant", "Hi! I’m RegulAIte. Ask me anything about your docs.")
+            ]
+        st.session_state.step = 3
+        st.rerun()
 
-        # 2️⃣ Otherwise, policy QA
+# ─── Step 3: Chat ───────────────────────────────────────────────
+elif st.session_state.step == 3 and st.session_state.indexed:
+    st.header("3) Chat with RegulAIte")
+
+    # render chat so far
+    for role, text in st.session_state.history:
+        st.chat_message(role).markdown(text)
+
+    # input
+    user_input = st.chat_input("Type your question… (max 50 words)")
+    if user_input:
+        if len(user_input.split()) > MAX_WORDS:
+            st.warning(f"Your question is over {MAX_WORDS} words—please shorten it.")
         else:
-            # record & render user
+            # echo user instantly
             st.session_state.history.append(("user", user_input))
-            st.chat_message("user").write(user_input)
+            st.chat_message("user").markdown(user_input)
 
-            # build history_pairs [(q,a), ...]
-            history_pairs = []
-            flat = st.session_state.history
-            for i in range(0, len(flat) - 1, 2):
-                if flat[i][0] == "user" and flat[i+1][0] == "assistant":
-                    history_pairs.append((flat[i][1], flat[i+1][1]))
+            # status while answering
+            searching = st.empty()
+            searching.info("Searching…")
 
-            # run the conversational chain
+            # assistant container (for streaming + sources)
+            assistant_box = st.chat_message("assistant")
+            stream_placeholder = assistant_box.empty()
+
+            # build proper chat history pairs
+            history_pairs = build_history_pairs(st.session_state.history)
+
+            # call chain
             res = st.session_state.qa({
                 "question": user_input,
                 "chat_history": history_pairs
             })
+
+            searching.empty()
             answer = res["answer"]
-
-            # record & render assistant
+            stream_placeholder.markdown(answer)  # final text
             st.session_state.history.append(("assistant", answer))
-            st.chat_message("assistant").write(answer)
 
-            # show sources
-            with st.expander("Sources", expanded=False):
-                for doc in res["source_documents"]:
-                    src = doc.metadata.get("source", "unknown")
-                    snippet = doc.page_content.strip().replace("\n", " ")[:300]
-                    st.markdown(f"- **{src}**: {snippet}…")
+            # show sources (deduped)
+            show_sources(assistant_box, res.get("source_documents", []))
+
+    # footer buttons (bottom)
+    st.write("")  # spacer
+    st.write("")
+    fcol1, fcol2 = st.columns(2)
+    with fcol1:
+        if st.button("Back", key="back_btn_footer"):
+            st.session_state.step = 2
+            st.rerun()
+    with fcol2:
+        if st.button("Finish", key="finish_btn_footer"):
+            for k in ("step", "history", "qa", "indexed", "provider"):
+                st.session_state.pop(k, None)
+            st.rerun()
