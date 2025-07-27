@@ -1,4 +1,3 @@
-from langchain_openai import ChatOpenAI
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain.chains import ConversationalRetrievalChain, LLMChain

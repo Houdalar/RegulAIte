@@ -35,18 +35,12 @@ if "qa" not in st.session_state:
     st.session_state.qa = None
 if "history" not in st.session_state:
     st.session_state.history = []
-if "suggestions" not in st.session_state:
-    st.session_state.suggestions = None
 if "provider" not in st.session_state:
     st.session_state.provider = "openai"
 
 # Model switcher
-st.sidebar.header("Settings")
-st.session_state.provider = st.sidebar.radio(
-    "Model",
-    ["OpenAI", "Qwen"],
-    index=0 if st.session_state.provider == "openai" else 1,
-).lower()
+use_qwen = st.toggle("Use Qwen model", value=st.session_state.provider == "qwen")
+st.session_state.provider = "qwen" if use_qwen else "openai"
 
 # ─── 1. Analyze Documents ───────────────────────────────────────
 if not st.session_state.indexed:
@@ -66,35 +60,30 @@ if not st.session_state.indexed:
             st.session_state.indexed = True
 
             sug_res = st.session_state.qa({"question": "List the main policy topics covered in these documents.", "chat_history": []})
-            st.session_state.suggestions = sug_res["answer"]
+            topics = [
+                line.strip("• ").strip()
+                for line in (sug_res.get("answer") or "").split("\n")
+                if line.strip()
+            ]
+            short = ", ".join(topics[:3])
+            welcome = (
+                f"<i class='fas fa-robot'></i> Hi, I'm <b>RegulAIte</b>. "
+                f"How can I assist you today? You can ask about topics like {short}."
+            )
+            st.session_state.history.append(("assistant", welcome))
 
-        st.success("Analysis complete! Scroll down for suggestions and chat.")
+        st.success("Analysis complete! You can start asking questions below.")
 
 # ─── 2. Chat Interface ──────────────────────────────────────────
 if st.session_state.indexed:
     st.header("2. Ask Your Policy Questions")
 
-    if st.button("<i class='fas fa-trash'></i> Clear Chat", unsafe_allow_html=True):
+    if st.button("Clear Chat"):
         st.session_state.history = []
-
-    if not st.session_state.history:
-        st.markdown("### Try asking about one of these policies:")
-        topics = [
-            line.strip("• ").strip()
-            for line in (st.session_state.suggestions or "").split("\n")
-            if line.strip()
-        ]
-        cols = st.columns(min(len(topics), 3), gap="large")
-        for i, topic in enumerate(topics):
-            question_text = f"What is the policy regarding {topic.lower()}?"
-            with cols[i % len(cols)]:
-                st.markdown(f"**{topic}**")
-                if st.button(question_text, key=f"sug_{i}"):
-                    st.session_state.history.append(("user", question_text))
 
     for role, msg in st.session_state.history:
         with st.chat_message(role):
-            st.write(msg)
+            st.markdown(msg, unsafe_allow_html=True)
 
     user_input = st.chat_input("Type your question here…")
     if user_input:
@@ -105,10 +94,10 @@ if st.session_state.indexed:
                 "You can ask about policies like sick leave, pay raise, etc."
             )
             st.session_state.history.append(("assistant", reply))
-            st.chat_message("assistant").write(reply)
+            st.chat_message("assistant").markdown(reply, unsafe_allow_html=True)
         else:
             st.session_state.history.append(("user", user_input))
-            st.chat_message("user").write(user_input)
+            st.chat_message("user").markdown(user_input)
 
             history_pairs = []
             flat = st.session_state.history
@@ -120,7 +109,7 @@ if st.session_state.indexed:
             answer = res["answer"]
 
             st.session_state.history.append(("assistant", answer))
-            st.chat_message("assistant").write(answer)
+            st.chat_message("assistant").markdown(answer, unsafe_allow_html=True)
 
             with st.expander("Sources", expanded=False):
                 unique = []
