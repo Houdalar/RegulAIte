@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+
+# data & models
+data/processed/
+vectorstore/
+models/
+
+# env files
+.env
