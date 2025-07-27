@@ -86,7 +86,7 @@ Here's a quick look at **RegulAIte** in action:
 ---
 
 ## 📁 Folder Structure
-    ```bash
+  
     regulaite/
     ├── app/                 # Core logic: ingestion, embeddings, QA chain, LLM factory
     ├── ui/                  # Streamlit UI
@@ -96,7 +96,7 @@ Here's a quick look at **RegulAIte** in action:
     ├── .env                 # your API keys
     ├── requirements.txt     # Python dependencies
     └── README.md
-    ```
+
 ---
 
 ## 🤝 Contributing
