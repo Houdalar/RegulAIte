@@ -100,8 +100,4 @@ Here's a quick look at **RegulAIte** in action:
 ---
 
 ## 🤝 Contributing
-I welcome contributions! Please open a Pull Request if you have features, bug fixes, or improvements:
-- 1.Fork the repo & create a feature branch
-- 2.Update code & README, add new dependencies to requirements.txt
-- 3.Write clear commit messages
-- 4.Submit a Pull Request describing your changes
+Interested in helping out? Please read our [Contributing Guidelines](CONTRIBUTING.md) to get started.
